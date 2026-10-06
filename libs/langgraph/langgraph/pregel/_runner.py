@@ -272,7 +272,9 @@ class PregelRunner:
                         submit=self.submit,
                     ),
                 },
-                __reraise_on_exit__=reraise,
+                # failures routed to an error handler are handled by the runner
+                __reraise_on_exit__=reraise
+                and not self._should_route_to_error_handler(t),
             )
             futures[fut] = t
         # execute tasks, and wait for one to fail or all to finish.
@@ -470,7 +472,9 @@ class PregelRunner:
                     },
                     __name__=t.name,
                     __cancel_on_exit__=True,
-                    __reraise_on_exit__=reraise,
+                    # failures routed to an error handler are handled by the runner
+                    __reraise_on_exit__=reraise
+                    and not self._should_route_to_error_handler(t),
                 ),
             )
             futures[fut] = t

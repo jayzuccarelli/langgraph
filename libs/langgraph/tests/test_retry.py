@@ -2283,6 +2283,44 @@ def test_node_error_handlers_route_to_matching_handler():
     assert result_b["foo"] == ["handled_b"]
 
 
+def test_graph_error_handler_with_concurrent_sibling_does_not_reraise():
+    class State(TypedDict):
+        foo: Annotated[list[str], operator.add]
+
+    def start_node(state: State) -> State:
+        return {"foo": ["start"]}
+
+    def failing_node(state: State) -> State:
+        raise RuntimeError("failing_node failed")
+
+    def sibling_node(state: State) -> State:
+        return {"foo": ["sibling"]}
+
+    def err_handler_node(state: State, error: NodeError) -> Command:
+        return Command(update={"foo": [f"handled_{error.node}"]}, goto="next_node")
+
+    def next_node(state: State) -> State:
+        return {"foo": ["next"]}
+
+    graph = (
+        StateGraph(State)
+        .add_node("start_node", start_node)
+        .add_node("failing_node", failing_node, error_handler=err_handler_node)
+        .add_node("sibling_node", sibling_node)
+        .add_node("next_node", next_node)
+        .add_edge(START, "start_node")
+        .add_edge("start_node", "failing_node")
+        .add_edge("start_node", "sibling_node")
+        .compile()
+    )
+
+    chunks = [*graph.stream({"foo": []}, stream_mode="updates")]
+    assert {"next_node": {"foo": ["next"]}} in chunks
+    assert sorted(graph.invoke({"foo": []})["foo"]) == sorted(
+        ["start", "handled_failing_node", "sibling", "next"]
+    )
+
+
 def test_node_without_error_handler_still_fails_run():
     class State(TypedDict):
         foo: str

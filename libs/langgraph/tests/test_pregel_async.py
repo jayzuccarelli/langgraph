@@ -9681,6 +9681,46 @@ async def test_graph_error_handler_does_not_swallow_interrupt_concurrent() -> No
     )
 
 
+async def test_graph_error_handler_with_concurrent_sibling_does_not_reraise_async() -> (
+    None
+):
+    class State(TypedDict):
+        foo: Annotated[list[str], operator.add]
+
+    async def start_node(state: State) -> State:
+        return {"foo": ["start"]}
+
+    async def failing_node(state: State) -> State:
+        raise RuntimeError("failing_node failed")
+
+    async def sibling_node(state: State) -> State:
+        return {"foo": ["sibling"]}
+
+    async def err_handler_node(state: State, error: NodeError) -> Command:
+        return Command(update={"foo": [f"handled_{error.node}"]}, goto="next_node")
+
+    async def next_node(state: State) -> State:
+        return {"foo": ["next"]}
+
+    graph = (
+        StateGraph(State)
+        .add_node("start_node", start_node)
+        .add_node("failing_node", failing_node, error_handler=err_handler_node)
+        .add_node("sibling_node", sibling_node)
+        .add_node("next_node", next_node)
+        .add_edge(START, "start_node")
+        .add_edge("start_node", "failing_node")
+        .add_edge("start_node", "sibling_node")
+        .compile()
+    )
+
+    chunks = [c async for c in graph.astream({"foo": []}, stream_mode="updates")]
+    assert {"next_node": {"foo": ["next"]}} in chunks
+    assert sorted((await graph.ainvoke({"foo": []}))["foo"]) == sorted(
+        ["start", "handled_failing_node", "sibling", "next"]
+    )
+
+
 async def test_node_error_handler_handles_subgraph_internal_failure_async() -> None:
     class SubState(TypedDict):
         foo: str
