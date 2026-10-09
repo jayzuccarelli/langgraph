@@ -541,6 +541,84 @@ def test_execution_info_identity_fields_populated_on_retry():
     assert captured_infos[1]["node_attempt"] == 2
 
 
+def test_retry_keeps_subgraph_checkpoint_namespaces():
+    """Subgraphs called again on a retry must reuse their checkpoint namespaces,
+    otherwise a later subgraph resumes into an earlier one's checkpoint."""
+
+    class State(TypedDict):
+        text: str
+
+    calls: list[str] = []
+
+    def subgraph(text: str):
+        def n(state: State) -> State:
+            calls.append(text)
+            return {"text": text}
+
+        return StateGraph(State).add_node("n", n).add_edge(START, "n").compile()
+
+    research, review = subgraph("research"), subgraph("review")
+    fail = True
+
+    def node(state: State) -> State:
+        research.invoke({})
+        if fail:
+            raise ConnectionError
+        return review.invoke({})
+
+    graph = (
+        StateGraph(State)
+        .add_node(node, retry_policy=RetryPolicy(max_attempts=3))
+        .add_edge(START, "node")
+        .compile(checkpointer=InMemorySaver())
+    )
+    config = {"configurable": {"thread_id": "1"}}
+
+    with patch("time.sleep"), pytest.raises(ConnectionError):
+        graph.invoke({}, config)
+    fail = False
+    assert graph.invoke(None, config) == {"text": "review"}
+    assert calls == ["research", "review"]
+
+
+@pytest.mark.anyio
+async def test_retry_keeps_subgraph_checkpoint_namespaces_async():
+    class State(TypedDict):
+        text: str
+
+    calls: list[str] = []
+
+    def subgraph(text: str):
+        async def n(state: State) -> State:
+            calls.append(text)
+            return {"text": text}
+
+        return StateGraph(State).add_node("n", n).add_edge(START, "n").compile()
+
+    research, review = subgraph("research"), subgraph("review")
+    fail = True
+
+    async def node(state: State) -> State:
+        await research.ainvoke({})
+        if fail:
+            raise ConnectionError
+        return await review.ainvoke({})
+
+    graph = (
+        StateGraph(State)
+        .add_node(node, retry_policy=RetryPolicy(max_attempts=3))
+        .add_edge(START, "node")
+        .compile(checkpointer=InMemorySaver())
+    )
+    config = {"configurable": {"thread_id": "1"}}
+
+    with patch("asyncio.sleep"), pytest.raises(ConnectionError):
+        await graph.ainvoke({}, config)
+    fail = False
+    assert await graph.ainvoke(None, config) == {"text": "review"}
+    assert calls == ["research", "review"]
+
+
 def test_ensure_execution_info_noop_when_already_set():
     """Test that _ensure_execution_info is a no-op when execution_info exists."""
     existing_info = ExecutionInfo(

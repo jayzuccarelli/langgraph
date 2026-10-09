@@ -28,6 +28,7 @@ from langgraph._internal._constants import (
     CONFIG_KEY_CHECKPOINT_NS,
     CONFIG_KEY_RESUMING,
     CONFIG_KEY_RUNTIME,
+    CONFIG_KEY_SCRATCHPAD,
     CONFIG_KEY_SEND,
     CONFIG_KEY_STREAM,
     CONFIG_KEY_TASK_ID,
@@ -36,6 +37,7 @@ from langgraph._internal._constants import (
     NS_SEP,
 )
 from langgraph._internal._runnable import create_task_in_config_context
+from langgraph._internal._scratchpad import PregelScratchpad
 from langgraph._internal._timeout import sync_timeout_unsupported
 from langgraph.errors import (
     GraphBubbleUp,
@@ -43,6 +45,7 @@ from langgraph.errors import (
     NodeTimeoutError,
     ParentCommand,
 )
+from langgraph.pregel._algo import LazyAtomicCounter
 from langgraph.pregel.protocol import StreamProtocol
 from langgraph.runtime import ExecutionInfo, Runtime
 from langgraph.types import Command, PregelExecutableTask, RetryPolicy, TimeoutPolicy
@@ -680,6 +683,7 @@ def run_with_retry(
             )
             # signal subgraphs to resume (if available)
             config = patch_configurable(config, {CONFIG_KEY_RESUMING: True})
+            config = _reset_subgraph_counter(config)
 
 
 async def arun_with_retry(
@@ -836,6 +840,23 @@ async def arun_with_retry(
             )
             # signal subgraphs to resume (if available)
             config = patch_configurable(config, {CONFIG_KEY_RESUMING: True})
+            config = _reset_subgraph_counter(config)
+
+
+def _reset_subgraph_counter(config: RunnableConfig) -> RunnableConfig:
+    """Restart subgraph numbering so a retried attempt reuses the checkpoint
+    namespaces of the subgraphs it already ran."""
+    scratchpad = config[CONF].get(CONFIG_KEY_SCRATCHPAD)
+    if not isinstance(scratchpad, PregelScratchpad):
+        return config
+    return patch_configurable(
+        config,
+        {
+            CONFIG_KEY_SCRATCHPAD: replace(
+                scratchpad, subgraph_counter=LazyAtomicCounter()
+            )
+        },
+    )
 
 
 def _should_retry_on(retry_policy: RetryPolicy, exc: Exception) -> bool:
