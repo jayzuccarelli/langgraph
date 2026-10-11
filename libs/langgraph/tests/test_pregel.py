@@ -4906,6 +4906,40 @@ def test_interrupt_multiple(
     ]
 
 
+@pytest.mark.parametrize("when", ["interrupt_before", "interrupt_after"])
+def test_interrupt_single_node_name(
+    sync_checkpointer: BaseCheckpointSaver, when: str
+) -> None:
+    class State(TypedDict):
+        ran: Annotated[list[str], operator.add]
+
+    builder = StateGraph(State)
+    for name in ("no", "node_one", "two"):
+        builder.add_node(name, lambda state, name=name: {"ran": [name]})
+    builder.add_edge(START, "no")
+    builder.add_edge("no", "node_one")
+    builder.add_edge("node_one", "two")
+    builder.add_edge("two", END)
+
+    # "no" is a substring of "node_one", but only node_one should interrupt
+    ran, next_ = (
+        (["no"], ("node_one",))
+        if when == "interrupt_before"
+        else (["no", "node_one"], ("two",))
+    )
+
+    graph = builder.compile(checkpointer=sync_checkpointer)
+    config = {"configurable": {"thread_id": "1"}}
+    assert graph.invoke({"ran": []}, config, **{when: "node_one"}) == {"ran": ran}
+    assert graph.get_state(config).next == next_
+
+    for nodes in ("node_one", ("node_one",)):
+        graph = builder.compile(checkpointer=sync_checkpointer, **{when: nodes})
+        config = {"configurable": {"thread_id": f"2-{type(nodes).__name__}"}}
+        assert graph.invoke({"ran": []}, config) == {"ran": ran}
+        assert graph.get_state(config).next == next_
+
+
 def test_interrupt_loop(sync_checkpointer: BaseCheckpointSaver):
     class State(TypedDict):
         age: int

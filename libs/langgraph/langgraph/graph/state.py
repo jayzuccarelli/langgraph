@@ -1256,11 +1256,19 @@ class StateGraph(Generic[StateT, ContextT, InputT, OutputT]):
         # assign default values
         interrupt_before = interrupt_before or []
         interrupt_after = interrupt_after or []
+        # a single node name is one node, not a sequence of characters
+        if isinstance(interrupt_before, str) and interrupt_before != "*":
+            interrupt_before = [interrupt_before]
+        if isinstance(interrupt_after, str) and interrupt_after != "*":
+            interrupt_after = [interrupt_after]
 
         # validate the graph
         self.validate(
             interrupt=(
-                (interrupt_before if interrupt_before != "*" else []) + interrupt_after
+                [
+                    *(interrupt_before if interrupt_before != "*" else []),
+                    *interrupt_after,
+                ]
                 if interrupt_after != "*"
                 else []
             )
